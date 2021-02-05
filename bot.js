@@ -9,7 +9,7 @@ const HornyJail = require('./HornyJail');
 const api = 'https://api.twitch.tv/helix/';
 const headers = {
     'Authorization': `Bearer ${process.env.OAUTH_TOKEN.slice(6)}`,
-    'client-id': process.env.CLIENT_ID
+    'Client-Id': process.env.CLIENT_ID
 };
 
 const opts = {
@@ -31,6 +31,8 @@ client.connect();
 
 let hornyjail = new HornyJail();
 
+let lurkers = new Set();
+
 async function onMessageHandler(target, context, msg, self) {
     if (self) { return; }
 
@@ -40,7 +42,7 @@ async function onMessageHandler(target, context, msg, self) {
 
     switch (commandName) {
         case '!so':
-            getUser(m[1], res => client.say(target, `Shoutout to ${res}! Check them out at https://twitch.tv/${res}`));
+            getUser(m[1], res => client.say(target, `Shoutout to ${res.display_name}! Check them out at https://twitch.tv/${res.display_name}`));
             /*fetch(api + 'users?login=' + m[1], { headers: headers })
                 .then(res => res.json())
                 .then(res => res.data[0].display_name)
@@ -50,8 +52,8 @@ async function onMessageHandler(target, context, msg, self) {
         case '!bonk':
             getUser(m[1], res => {
                 if (hornyjail.size == 0 || hornyjail.hornyjail.size <= hornyjail.size) {
-                    client.say(target, `Bonk! Go to horny jail, ${m[1].trim()}!`);
-                    hornyjail.addUser(m[1].trim());
+                    client.say(target, `Bonk! Go to horny jail, ${res.display_name.trim()}!`);
+                    hornyjail.addUser(res.display_name.trim());
                 }
                 else {
                     client.say(target, `Horny jail is full! Chat is too horny!`)
@@ -76,6 +78,18 @@ async function onMessageHandler(target, context, msg, self) {
     }
 }
 
+client.on('join', (channel, username, self) => {
+    if (self) return;
+    if (!(follows(username, channel.slice(1)).total)) {
+        lurkers.add({ channel: channel, username: username });
+        console.log(channel, username);
+    }
+});
+
+client.on('part', (channel, username, self) => {
+
+});
+
 function onConnectedHandler(addr, port) {
     console.log(`* Connected to ${addr}:${port}`);
 }
@@ -83,7 +97,7 @@ function onConnectedHandler(addr, port) {
 async function getUser(username, callback = null) {
     return await fetch(api + 'users?login=' + username, { headers: headers })
         .then(res => res.json())
-        .then(res => res.data[0].display_name)
+        .then(res => res.data[0])
         .then(res => res && callback ? callback(res) : res)
         .catch(e => console.error(e));
 }
@@ -93,14 +107,26 @@ const rl = readline.createInterface({
     output: process.stdout
 });
 
+async function follows(a, b, callback = null) {
+    return await fetch(api + `users/follows?from_id=${parseInt(a.id)}&to_id=${parseInt(b.id)}`, { headers: headers })
+        .then(res => res.json())
+        .then(res => res)
+        .catch(e => console.error(e));
+}
+
 rl.on('line', terminal);
 
-function terminal(input) {
+async function terminal(input) {
     m = input.split(' ');
 
-    switch(m[0]){
+    switch (m[0]) {
         case 'to':
             client.say(`#${m[1]}`, m.slice(2).join(' '));
+            break;
+        case 'follows':
+            follower = await getUser(m[1]);
+            followee = await getUser(m[2]);
+            follows(follower, followee).then(res => console.log(res.total));
             break;
     }
 }
