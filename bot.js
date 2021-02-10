@@ -2,9 +2,16 @@ const tmi = require('tmi.js');
 const fetch = require('node-fetch');
 const { normalize } = require('path');
 const readline = require('readline');
+const OBSWebSocket = require('obs-websocket-js');
 require('dotenv').config();
 
 const HornyJail = require('./HornyJail');
+
+//
+//
+//  Twitch chat connect
+//
+//
 
 const api = 'https://api.twitch.tv/helix/';
 const headers = {
@@ -18,7 +25,7 @@ const opts = {
         password: process.env.OAUTH_TOKEN
     },
     channels: [
-        process.env.CHANNEL_NAME, ...process.env.CHANNEL_LIST.split(' ')
+        process.env.CHANNEL_NAME, "CazhStrats"//process.env.CHANNEL_LIST.split(' ')[0]
     ]
 };
 
@@ -31,7 +38,8 @@ client.connect();
 
 let hornyjail = new HornyJail();
 
-let lurkers = new Set();
+let lurkers = {};
+let me;
 
 async function onMessageHandler(target, context, msg, self) {
     if (self) { return; }
@@ -42,7 +50,7 @@ async function onMessageHandler(target, context, msg, self) {
 
     switch (commandName) {
         case '!so':
-            getUser(m[1], res => client.say(target, `Shoutout to ${res.display_name}! Check them out at https://twitch.tv/${res.display_name}`));
+            getUser(m[1], res => client.say(target, `!Shoutout to ${res.display_name}! Check them out at https://twitch.tv/${res.display_name}`));
             /*fetch(api + 'users?login=' + m[1], { headers: headers })
                 .then(res => res.json())
                 .then(res => res.data[0].display_name)
@@ -52,25 +60,31 @@ async function onMessageHandler(target, context, msg, self) {
         case '!bonk':
             getUser(m[1], res => {
                 if (hornyjail.size == 0 || hornyjail.hornyjail.size <= hornyjail.size) {
-                    client.say(target, `Bonk! Go to horny jail, ${res.display_name.trim()}!`);
-                    hornyjail.addUser(res.display_name.trim());
+                    client.say(target, `!Bonk! Go to horny jail, ${res.display_name.trim()}!`);
+                    hornyjail.addUser(res.display_name.trim(), m[2] ? parseInt(m[2]) * 1000 : null);
                 }
                 else {
-                    client.say(target, `Horny jail is full! Chat is too horny!`)
+                    client.say(target, `!Horny jail is full! Chat is too horny!`)
                 }
             });
             break;
         case '!hornyjail':
-            if (hornyjail.hornyjail.size) client.say(target, `These users are in horny jail: ${hornyjail.prisoners}`);
-            else client.say(target, `There are no users in horny jail`)
+            if (Object.keys(hornyjail.hornyjail).length) client.say(target, `!These users are in horny jail: ${hornyjail.prisoners}`);
+            else client.say(target, `!There are no users in horny jail`)
             break;
         case '!free':
-            if (hornyjail.removeUser(m[1])) {
-                client.say(target, `${m[1]} was freed from horny jail. For now...`);
+            if (hornyjail.removeUser(hornyjail, m[1])) {
+                client.say(target, `!${m[1]} was freed from horny jail. For now...`);
             }
             break;
         case '!lurk':
-            client.say(target, `${context['display-name']} is having a lurk`)
+            client.say(target, `!${context['display-name']} is having a lurk`)
+            break;
+        case '!roll':
+            client.say(target, `!Rolled a d${m.length > 1 && parseInt(m[1]) ? m[1] : 6} and got ${Math.floor(Math.random() * (m.length > 1 && parseInt(m[1]) ? parseInt(m[1]) : 6)) + 1}`);
+            break;
+        case '!lurkers':
+            client.say(target, `!${lurkers[target] && lurkers[target].length ? `Current lurkers: ${lurkers[target].join(', ')}` : `No lurkers`}`);
             break;
         default:
             //console.log(`* Unknown command ${commandName}`);
@@ -78,20 +92,31 @@ async function onMessageHandler(target, context, msg, self) {
     }
 }
 
-client.on('join', (channel, username, self) => {
+client.on('join', async (channel, username, self) => {
     if (self) return;
-    if (!(follows(username, channel.slice(1)).total)) {
-        lurkers.add({ channel: channel, username: username });
-        console.log(channel, username);
+    if (channel.slice(1) == username) return;
+
+    let followage = await follows(await getUser(username), await getUser(channel.slice(1)));
+    //console.log(followage);
+    if (!(followage.total)) {
+        if (!lurkers[channel]) lurkers[channel] = [];
+        lurkers[channel].push(username);
+        //console.log(channel, username);
     }
 });
 
 client.on('part', (channel, username, self) => {
+    if (self) return;
 
+    if (lurkers[channel]) {
+        lurkers[channel] = lurkers[channel].filter(p => p != username);
+        //console.log(`${username} left ${channel}`);
+    }
 });
 
 function onConnectedHandler(addr, port) {
     console.log(`* Connected to ${addr}:${port}`);
+    me = getUser(process.env.BOT_USERNAME);
 }
 
 async function getUser(username, callback = null) {
@@ -102,6 +127,12 @@ async function getUser(username, callback = null) {
         .catch(e => console.error(e));
 }
 
+//
+//
+//  Runtime terminal
+//
+//
+
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
@@ -110,8 +141,18 @@ const rl = readline.createInterface({
 async function follows(a, b, callback = null) {
     return await fetch(api + `users/follows?from_id=${parseInt(a.id)}&to_id=${parseInt(b.id)}`, { headers: headers })
         .then(res => res.json())
-        .then(res => res)
         .catch(e => console.error(e));
+}
+
+async function followUser(user, callback = null) {
+    return await fetch(api + `users/follows?scope=user:edit:follows`, {
+        method: 'POST',
+        headers: {
+            ...headers,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 'to_id': `${user.id}`, 'from_id': `${me.id}` })
+    });
 }
 
 rl.on('line', terminal);
@@ -126,7 +167,41 @@ async function terminal(input) {
         case 'follows':
             follower = await getUser(m[1]);
             followee = await getUser(m[2]);
-            follows(follower, followee).then(res => console.log(res.total));
+            follows(follower, followee)
+                .then(res => console.log(res.total));
+            break;
+        case 'follow':
+            followee = await getUser(m[1]);
+            followUser(followee)
+                .then(res => console.log(res))
+                .catch(error => console.error(error));
+            break;
+        case 'getuser':
+            user = await getUser(m[1]);
+            console.log(user);
             break;
     }
 }
+
+//
+//
+//  OBS control
+//
+//
+
+const obs = new OBSWebSocket();
+
+obs.connect({ address: 'localhost:4444' })
+    .then(res => obs.send('GetAuthRequired'))
+    .then(res => console.log(res))
+    .catch(error => console.error(error));
+
+const callback = (data) => {
+    console.log(data);
+};
+
+//obs.on('ConnectionOpened', (data) => callback(data).catch(error => console.error(error)));
+//obs.on('ConnectionClosed', (data) => callback(data));
+//obs.on('AuthenticationSuccess', (data) => callback(data));
+//obs.on('AuthenticationFailure', (data) => callback(data));
+
