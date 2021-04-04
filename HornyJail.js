@@ -17,9 +17,10 @@ module.exports = class HornyJail {
     }
 
     addUser(username, time = this.defJailtime) {
+        if (!time) time = this.defJailtime;
         if (!this.hornyjail[username]) this.hornyjail[username] = Math.floor(time / 1000);
         if (time) setTimeout(() => this.countdown(this, username, 1, this.countdown, this.removeUser));
-        console.log(`${username} sentenced to ${Math.floor(time / 1000)} seconds in jail`);
+        console.log(`${username} sentenced to ${Math.floor(time / 1000)} seconds in horny jail`);
     }
 
     removeUser(context, username) {
@@ -28,6 +29,10 @@ module.exports = class HornyJail {
     }
 
     get prisoners() {
+        return Object.keys(this.hornyjail);
+    }
+
+    get prisonersStr() {
         return Object.keys(this.hornyjail).join(', ');
     }
 }
