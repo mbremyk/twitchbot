@@ -4,9 +4,23 @@ const readline = require('readline');
 const OBSWebSocket = require('obs-websocket-js');
 const fs = require('fs');
 const axios = require('axios');
+const say = require('say');
+const yargs = require('yargs');
+const naughty_words = require('naughty-words');
+const naughty_en = naughty_words.en;
+const naughty_no = naughty_words.no;
+const naughty = [...new Set(naughty_en.concat(naughty_no))];
 require('dotenv').config();
 
 const HornyJail = require('./HornyJail');
+
+const argv = yargs
+    .option('verbose', {
+        alias: 'v',
+        default: false,
+        type: "boolean"
+    })
+    .argv;
 
 //
 //
@@ -67,28 +81,86 @@ commands['!add'] = (target, context, msg) => {
 commands['!so'] = (target, context, msg) => {
     getUser(msg.split(' ')[1], res => client.say(target, `!Shoutout to ${res.display_name}! Check them out at https://twitch.tv/${res.display_name}`));
 }
-//eval
-//console.log(commands);
-//fs.writeFile('test.json', JSON.stringify(commands), error => console.error(error));
+
+let ttsRunning = false;
+let ttsQueue = [];
+
+let censor = (str) => {
+    str = str.toLowerCase();
+    let words = naughty.filter(word => str.search(word) >= 0);
+    words.sort((a, b) => b.length - a.length);
+    for (let word of words) {
+        while (str.search(word) >= 0) {
+            str = str.replace(new RegExp(word, 'gi'), () => parseInt(Math.random() * 100));
+        }
+    }
+    return str;
+}
+
+commands['!tts'] = commands['!say'] = commands['!si'] = (target, context, msg) => {
+    ttsQueue.push(censor(msg.split(' ').slice(1).join(' ')));
+    if (!ttsRunning) {
+        ttsRunning = true;
+        tts(ttsQueue.shift());
+    }
+}
+
+let tts = msg => {
+    say.speak(msg, null, null, () => {
+        if(ttsQueue.length) {
+            tts(ttsQueue.shift());
+        }        
+        else {
+            ttsRunning = false;
+        }
+    });
+}
+
+commands['!tts'](null, null, "a Initialising twitch bot");
+//commands['!tts'](null, null, "a This is an automated message");
+//commands['!tts'](null, null, "a This is an automated message");
+//commands['!tts'](null, null, "a This is an automated message");
+
+/**
+ * 
+ * Birthday time
+ * 
+ */
+
+let birthday = {};
+let cakes = ['brownie', 'piece of chocolate cake', 'piece of strawberry shortcake', 'piece of marsipan cake', 'gingerbread man', 'gingerbread woman', 'gingerbread enby', 'shapeless gingerbread cookie'];
+let drinks = ['cup of tea', 'cup of coffee', 'glass of water', 'glass of champagne', 'dry martini', 'coke', 'pepsi', 'generic soda'];
+
+birthday["!drink"] = (target, context, msg) => {
+    let rng = Math.floor(Math.random() * drinks.length);
+    client.action(target, `Here ${context['display-name']}, have a ${drinks[rng]}`)
+}
+
+birthday["!cake"] = (target, context, msg) => {
+    let rng = Math.floor(Math.random() * cakes.length);
+    client.action(target, `Here ${context['display-name']}, have a ${cakes[rng]}`)
+}
+
+/////////////////////////////////////////
 
 async function onMessageHandler(target, context, msg, self) {
     if (self) { return; }
 
     const m = msg.split(' ').map(s => s.replace('@', ''));
-    const commandName = m[0];
+    const commandName = m[0].toLowerCase();
     //console.log(context);
 
     switch (commandName) {
         case '!bonk':
             getUser(m[1], res => {
-                if (res.display_name == me.display_name) return;
+                if (res.display_name == "HorneePolice" || (me && res.display_name == me.display_name)) return;
                 if (hornyjail.prisoners.includes(context['display-name'])) {
                     client.say(target, `!You can't bonk someone from your cell, ${context['display-name']}`);
                 }
                 else if (hornyjail.prisoners.includes(res.display_name)) {
                     client.say(target, `!${res.display_name} is already in horny jail!`);
                 }
-                else if (hornyjail.size == 0 || hornyjail.hornyjail.size <= hornyjail.size) {
+                else if (hornyjail.size == 0 || hornyjail.hornyjail.size < hornyjail.size) {
                     client.say(target, `!Bonk! Go to horny jail, ${res.display_name.trim()}!`);
                     hornyjail.addUser(res.display_name.trim(), m[2] ? parseInt(m[2]) * 1000 : null);
                 }
@@ -151,6 +223,9 @@ async function onMessageHandler(target, context, msg, self) {
             if (commands[commandName]) {
                 commands[commandName](target, context, msg);
             }
+            else if (birthday[commandName]) {
+                birthday[commandName](target, context, msg);
+            }
             break;
     }
 }
@@ -187,11 +262,13 @@ function onConnectedHandler(addr, port) {
 }
 
 async function getUser(username, callback = null) {
+    console.log(`Fetching information about ${username}`);
     return await fetch(api + 'users?login=' + username, { headers: headers })
         .then(res => res.json())
+        .then(res => console.log(res))
         .then(res => res.data[0])
         .then(res => res && callback ? callback(res) : res)
-        .catch(e => console.error(e));
+        .catch(e => {if(argv.v) console.error(e);});
 }
 
 //
