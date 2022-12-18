@@ -6,13 +6,17 @@ const fs = require('fs');
 const axios = require('axios');
 const say = require('say');
 const yargs = require('yargs');
+//const ps = require('play-sound')
 const naughty_words = require('naughty-words');
 const naughty_en = naughty_words.en;
 const naughty_no = naughty_words.no;
 const naughty = [...new Set(naughty_en.concat(naughty_no))];
+
 require('dotenv').config();
 
 const HornyJail = require('./HornyJail');
+const NameQueue = require('./NameQueue');
+const DAO = require('./dao.js');
 
 const argv = yargs
     .option('verbose', {
@@ -47,6 +51,9 @@ const opts = {
 const client = new tmi.client(opts);
 
 client.on('message', onMessageHandler);
+client.on('subscription', onSubscriptionHandler);
+client.on('submysterygift', onSubmysterygiftHandler);
+client.on('hosted', onHostedHandler);
 client.on('connected', onConnectedHandler);
 
 client.connect().catch(err => console.error(err));
@@ -56,31 +63,56 @@ let hornyjail = new HornyJail();
 let lurkers = {};
 let me;
 
+const dao = new DAO('HorneePolice', 'stream', process.env.MYSQL_PASSWORD);
 let commands = {};
 
-let addCommand = (command, message = null) => {
+let addCommand = (command, message = null, user = null, insert = true) => {
     if (!commands[command]) {
         commands[command] = (target, context, msg) => {
             msg = msg.split(' ');
             answer = message.replace('$(fromuser)', context['display-name']).replace('$(touser)', msg[1]);
             client.say(target, answer);
+        };
+        if (insert) {
+            dao.createCommand(command, message, user);
         }
     }
-}
+};
 
-addCommand('!hi', '$(fromuser) says hi to $(touser)');
+let loadCommands = () => {
+    dao.getCommands()
+        .then(res => {
+            res.forEach(c => {
+                addCommand(c.command, c.response, c.user, false);
+            });
+        });
+};
+loadCommands();
+
+//addCommand('!hi', '$(fromuser) says hi to $(touser)');
 
 commands['!add'] = (target, context, msg) => {
     //console.log(target, target.replace('#', ''), target.replace('#', '').toLowerCase(), context['display-name'], context['display-name'].toLowerCase(), context.mod)
-    if (!(target.replace('#', '').toLowerCase() == context['display-name'].toLowerCase() || context.mod || context['display-name'].toLowerCase() == 'harumin24')) return;
+    if (!(target.replace('#', '').toLowerCase() == context['display-name'].toLowerCase() || context.mod || context['display-name'].toLowerCase() == 'harumin24' || context['display-name'].toLowerCase() == 'thechippdipp')) return;
 
     msg = msg.split(' ');
-    addCommand(msg[1], msg.slice(2).join(' '));
-}
+    addCommand(msg[1], msg.slice(2).join(' '), context['display-name']);
+};
 
 commands['!so'] = (target, context, msg) => {
     getUser(msg.split(' ')[1], res => client.say(target, `!Shoutout to ${res.display_name}! Check them out at https://twitch.tv/${res.display_name}`));
-}
+};
+
+commands['!nuzlocke'] = commands['!rules'] = (target, context, msg) => {
+    client.say(target, 'The rules of this nuzlocke are pretty lax. Pokémon dies it dies, one mon for each route, set battle style, items in battle allowed but discouraged, only one of each evolution line');
+};
+
+commands['!math'] = (target, context, msg) => {
+    let m = msg.split(' ').slice(1).join('');
+    if (!m.length) return;
+    const re = /[^+\-\*\/\d\s]/g;
+    client.say(target, re.test(m) ? `Invalid math expression. Invalid characters given by ${re}` : `${m}=` + eval(m));
+};
 
 let ttsRunning = false;
 let ttsQueue = [];
@@ -95,7 +127,7 @@ let censor = (str) => {
         }
     }
     return str;
-}
+};
 
 commands['!tts'] = commands['!say'] = commands['!si'] = (target, context, msg) => {
     ttsQueue.push(censor(msg.split(' ').slice(1).join(' ')));
@@ -103,23 +135,118 @@ commands['!tts'] = commands['!say'] = commands['!si'] = (target, context, msg) =
         ttsRunning = true;
         tts(ttsQueue.shift());
     }
-}
+};
 
 let tts = msg => {
     say.speak(msg, null, null, () => {
-        if(ttsQueue.length) {
+        if (ttsQueue.length) {
             tts(ttsQueue.shift());
-        }        
+        }
         else {
             ttsRunning = false;
         }
     });
-}
+};
 
 commands['!tts'](null, null, "a Initialising twitch bot");
 //commands['!tts'](null, null, "a This is an automated message");
 //commands['!tts'](null, null, "a This is an automated message");
 //commands['!tts'](null, null, "a This is an automated message");
+
+let codeUrl = 'https://github.com/mbremyk/twitchbot';
+
+commands['!code'] = (target, context, msg) => {
+    client.say(target, `!My code can be found at ${codeUrl}`);
+};
+
+commands['!hug'] = (target, context, msg) => {
+    let m = msg.split(' ');
+    if (m[1]) {
+        client.say(target, `${context['display-name']} gave ${m[1]} a big ol' hug`);
+    }
+};
+
+let trackerUrl = 'https://nuzlocke.netlify.app/';
+commands['!tracker'] = (target, context, msg) => {
+    client.say(target, `The nuzlocke tracker can be found at ${trackerUrl}`);
+};
+
+let nq;
+
+let loadQueue = (channel) => {
+    dao.getQueue().then(res => {
+        console.log(res);
+        nq = new NameQueue(channel, res);
+    });
+};
+
+loadQueue("mbremyk");
+
+commands['!queue'] = (target, context, msg) => {
+    let m = msg.split(' ');
+    switch (m[1]) {
+        case 'join': {
+            // console.log(context['display-name'], m[2], m[2] ? true : false);
+            m.splice(0, 2);
+            m = m.join(' ').trim();
+            nq.add(context['display-name'], m.length ? m : context['display-name']);
+            dao.joinQueue(context['display-name'], m.length ? m : context['display-name']);
+            break;
+        }
+        case 'leave': {
+            m.splice(0, 2);
+            m = m.join(' ').trim();
+            nq.remove(context['display-name'], m.length ? m : null);
+            dao.leaveQueue(context['display-name'], m.length ? m : null);
+            break;
+        }
+        case 'next': {
+            if (context.mod || target.replace('#', '') == context['display-name']) {
+                let o = nq.pop_next();
+                client.say(target, `Next name from ${o.user}: ${o.name}`);
+                dao.leaveQueue(o.user, o.name);
+            } else {
+                let o = nq.next();
+                client.say(target, `Next name from ${o.user}: ${o.name}`);
+            }
+            break;
+        }
+        default: {
+            let str = 'Naming queue: ';
+            nq.queue.forEach((o, i) => {
+                str += `${i + 1}. ${o.user}: ${o.name} `;
+            });
+            client.say(target, str);
+            break;
+        }
+    }
+};
+
+let normalRNG = (mean, stdDev) => {
+    return Math.sqrt(-2 * Math.log(Math.random())) * Math.cos(2 * Math.PI * Math.random()) * stdDev + mean;
+};
+
+/* let arr = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+console.log(arr);
+let max = -Infinity;
+
+for(let i = 0; i < 10000; ++i) {
+    let n = normalRNG(300, 100);
+    max = n > max ? n : max;
+    arr[Math.floor(n/25)]++;
+}
+
+console.log(arr);
+
+for(let i = 0; i < arr.length; ++i) {
+    let str = '';
+    for(let j = 0; j < arr[i] / 100; ++j) {
+        str += '#';
+    }
+    console.log(str);
+}
+
+console.log(max); */
 
 /**
  * 
@@ -133,13 +260,13 @@ let drinks = ['cup of tea', 'cup of coffee', 'glass of water', 'glass of champag
 
 birthday["!drink"] = (target, context, msg) => {
     let rng = Math.floor(Math.random() * drinks.length);
-    client.action(target, `Here ${context['display-name']}, have a ${drinks[rng]}`)
-}
+    client.action(target, `Here ${context['display-name']}, have a ${drinks[rng]}`);
+};
 
 birthday["!cake"] = (target, context, msg) => {
     let rng = Math.floor(Math.random() * cakes.length);
-    client.action(target, `Here ${context['display-name']}, have a ${cakes[rng]}`)
-}
+    client.action(target, `Here ${context['display-name']}, have a ${cakes[rng]}`);
+};
 
 /////////////////////////////////////////
 
@@ -149,6 +276,12 @@ async function onMessageHandler(target, context, msg, self) {
     const m = msg.split(' ').map(s => s.replace('@', ''));
     const commandName = m[0].toLowerCase();
     //console.log(context);
+
+    if (msg.search('deez') >= 0) {
+        client.say(target, 'nuts');
+    }
+
+    console.log(context);
 
     switch (commandName) {
         case '!bonk':
@@ -165,13 +298,13 @@ async function onMessageHandler(target, context, msg, self) {
                     hornyjail.addUser(res.display_name.trim(), m[2] ? parseInt(m[2]) * 1000 : null);
                 }
                 else {
-                    client.say(target, `!Horny jail is full! Chat is too horny!`)
+                    client.say(target, `!Horny jail is full! Chat is too horny!`);
                 }
             });
             break;
         case '!hornyjail':
             if (Object.keys(hornyjail.hornyjail).length) client.say(target, `!These users are in horny jail: ${hornyjail.prisonersStr}`);
-            else client.say(target, `!There are no users in horny jail`)
+            else client.say(target, `!There are no users in horny jail`);
             break;
         case '!free':
             if (hornyjail.prisoners.includes(context['display-name'])) {
@@ -182,7 +315,7 @@ async function onMessageHandler(target, context, msg, self) {
             }
             break;
         case '!lurk':
-            client.say(target, `!${context['display-name']} is having a lurk`)
+            client.say(target, `!${context['display-name']} is having a lurk`);
             break;
         case '!roll':
             client.say(target, `!Rolled a d${m.length > 1 && parseInt(m[1]) ? m[1] : 6} and got ${Math.floor(Math.random() * (m.length > 1 && parseInt(m[1]) ? parseInt(m[1]) : 6)) + 1}`);
@@ -191,11 +324,11 @@ async function onMessageHandler(target, context, msg, self) {
             client.say(target, `!${lurkers[target] && lurkers[target].length ? `Current lurkers: ${lurkers[target].join(', ')}` : `No lurkers`}`);
             break;
         case '!ctof':
-            if (m[1]) client.say(target, `! ${m[1]}C is ${Math.floor(parseInt(m[1]) * 100 * 9 / 5) / 100 + 32}F`);
+            if (m[1]) client.say(target, `! ${m[1]}C is ${Math.floor(parseFloat(m[1]) * 100 * 9 / 5) / 100 + 32}F`);
             else client.say(target, `!Usage: !ctof <int>`);
             break;
         case '!ftoc':
-            if (m[1]) client.say(target, `! ${m[1]}F is ${Math.floor((parseInt(m[1]) - 32) * 100 * 5 / 9) / 100}C`);
+            if (m[1]) client.say(target, `! ${m[1]}F is ${Math.floor((parseFloat(m[1]) - 32) * 100 * 5 / 9) / 100}C`);
             else client.say(target, `!Usage: !ctof <int>`);
             break;
         case '!lookup':
@@ -206,14 +339,16 @@ async function onMessageHandler(target, context, msg, self) {
                 .catch(error => console.error(error));
             break;
         case '!timeout':
+            let time = Math.floor(normalRNG(300, 100));
+            time = time > 0 ? time : 900;
             if ((target.replace('#', '').toLowerCase() == context['display-name'].toLowerCase() || context.mod) && m[1]) {
-                client.timeout(target, m[1], !!(m[2]) ? parseInt(m[2]) : 30)
+                client.timeout(target, m[1], !!(m[2]) ? parseInt(m[2]) : time)
                     .then((channel, username, seconds, reason) => {
                         console.log(`Timed out ${username} in ${channel} for ${seconds} seconds`);
                     });
             }
             else {
-                client.say(target, `/timeout ${context['display-name']} 30`)
+                client.timeout(target, context['display-name'], time)
                     .then((channel, username, seconds, reason) => {
                         console.log(`Timed out ${username} in ${channel} for ${seconds} seconds`);
                     });
@@ -262,13 +397,15 @@ function onConnectedHandler(addr, port) {
 }
 
 async function getUser(username, callback = null) {
+    let response = { display_name: username };
+    return response && callback ? callback(response) : response;
     console.log(`Fetching information about ${username}`);
     return await fetch(api + 'users?login=' + username, { headers: headers })
         .then(res => res.json())
         .then(res => console.log(res))
         .then(res => res.data[0])
         .then(res => res && callback ? callback(res) : res)
-        .catch(e => {if(argv.v) console.error(e);});
+        .catch(e => { if (argv.v) console.error(e); });
 }
 
 //
@@ -283,14 +420,15 @@ const rl = readline.createInterface({
 });
 
 async function follows(a, b, callback = null) {
+    return true;
     return await fetch(api + `users/follows?from_id=${parseInt(a.id)}&to_id=${parseInt(b.id)}`, { headers: headers })
         .then(res => res.json())
         .catch(e => console.error(e));
 }
 
 /*'https://api.twitch.tv/helix/users/follows' \
--H 'Authorization: Bearer 2gbdx6oar67tqtcmt49t3wpcgycthx' \
--H 'Client-Id: wbmytr93xzw8zbg0p1izqyzzc5mbiz' \
+-H 'Authorization: Bearer a' \
+-H 'Client-Id: s' \
 -H 'Content-Type: application/json' \
 --data-raw '{"to_id": "41245072","from_id": "57059344"}'*/
 
@@ -305,6 +443,27 @@ async function followUser(user, callback = null) {
         },
         body: JSON.stringify({ 'to_id': `${user.id}`, 'from_id': `${me.id}` })
     });
+}
+
+let getPlan = (methods) => {
+    let method = methods.prime ? 4 : parseInt(methods.plan) / 1000;
+    return method ? method : 0;
+};
+
+async function onSubscriptionHandler(channel, username, methods, message, userstate) {
+    let plan = getPlan(methods);
+    let method = plan == 4 ? 'with Prime' : `at Tier ${plan}`;
+    let tts = `a ${username} just ${userstate['message-type'] == 'resub' ? 're' : ''}subscribed ${method} for ${userstate['msg-param-cumulative-months']} months, saying: ${message}`;
+    commands['!say'](channel, null, tts);
+}
+
+async function onSubmysterygiftHandler(channel, username, numbOfSubs, methods, userstate) {
+    let tts = `a ${username} just gifted ${numbOfSubs} Tier ${getPlan(methods)} sub${numbOfSubs - 1 ? 's' : ''}. That's a lot of wasted money`;
+    commands['!say'](channel, null, tts);
+}
+
+async function onHostedHandler(channel, username, viewers) {
+    client.say(channel, `${username} just hosted with ${viewers} viewers`);
 }
 
 rl.on('line', terminal);
@@ -347,7 +506,7 @@ async function terminal(input) {
             eval(m.slice(1).join(' '));
             break;
         case 'exit':
-            process.exit(0);
+            exit(0);
             break;
     }
 }
@@ -391,6 +550,19 @@ fs.readFile('./bank.json', 'utf8', (err, data) => {
     if (!bank) bank = {};
 });
 
-process.on('SIGINT', () => {
+function exit(code = 0) {
     process.exit(0);
+}
+
+process.on('SIGINT', () => {
+    exit(0);
 });
+
+//
+//
+//      Play sound
+//
+//
+
+//let player = ps({});
+//player.play('bonk.mp3', {}, ()=>{});
